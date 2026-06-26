@@ -82,7 +82,7 @@ struct {
 
 struct {
     __uint(type, BPF_MAP_TYPE_LRU_HASH);
-    __uint(max_entries, 65536);
+    __uint(max_entries, 196608);
     __type(key, struct ct_key_v6);
     __type(value, __u64);
 } tcp_ct6 SEC(".maps");
@@ -96,7 +96,7 @@ struct {
 
 struct {
     __uint(type, BPF_MAP_TYPE_LRU_HASH);
-    __uint(max_entries, 65536);
+    __uint(max_entries, 196608);
     __type(key, struct ct_key_v6);
     __type(value, __u64);
 } udp_ct6 SEC(".maps");

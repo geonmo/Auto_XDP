@@ -1,0 +1,15 @@
+---
+# Deploy stateful firewall test components
+# Usage: ansible-playbook -i inventory.ini playbook.yml
+
+- name: Deploy target server on VM.4
+  hosts: target_node
+  become: true
+  roles:
+    - target_server
+
+- name: Deploy attacker on VM.5
+  hosts: attacker_node
+  become: true
+  roles:
+    - attacker

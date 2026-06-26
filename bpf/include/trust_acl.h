@@ -38,6 +38,16 @@ static __always_inline bool is_bogon_v6(const struct in6_addr *addr)
     return false;
 }
 
+// Returns true if saddr belongs to the configured local subnet (bypasses bogon filter).
+// Set via xdp_runtime_cfg.local_subnet4_{addr,mask} by the loader.
+static __always_inline bool saddr_in_local_net4(__be32 saddr)
+{
+    struct xdp_runtime_cfg *cfg = runtime_cfg();
+    if (!cfg || !cfg->local_subnet4_mask)
+        return false;
+    return (saddr & cfg->local_subnet4_mask) == cfg->local_subnet4_addr;
+}
+
 static __always_inline bool is_trusted_v4(__be32 saddr)
 {
     struct trusted_v4_key tk = { .prefixlen = 32, .addr = saddr };

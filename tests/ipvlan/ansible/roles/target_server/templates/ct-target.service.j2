@@ -1,0 +1,19 @@
+[Unit]
+Description=CT Test Target Server (auto_xdp_ipvlan)
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /opt/ct-test/target_server.py
+Environment=LISTEN_PORT=8080
+Environment=API_PORT=9090
+Environment=NODE_NAME=target-{{ inventory_hostname }}
+Restart=on-failure
+RestartSec=3
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ct-target
+
+[Install]
+WantedBy=multi-user.target

@@ -363,6 +363,29 @@ struct {
     __uint(map_flags, BPF_F_NO_PREALLOC);
 } abuseipdb_v4 SEC(".maps");
 
+// ── IPVLAN 컨테이너 이그레스 보호 맵 ──────────────────────────────────────────
+// 이 맵에 등록된 IP(컨테이너 IP)를 목적지로 하는 패킷은 포트 화이트리스트와
+// 레이트 리미터를 우회하고 CT 엔트리 존재 여부만으로 PASS/DROP을 결정한다.
+// TC egress tracker(tc_flow_track.c)가 컨테이너 발신 패킷의 역방향 튜플을
+// tcp_ct4/udp_ct4에 기록하므로 허가된 응답만 통과한다.
+struct {
+    __uint(type,        BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 16);
+    __type(key,   __be32);
+    __type(value, __u8);
+    __uint(map_flags, BPF_F_NO_PREALLOC);
+} protected_ipv4 SEC(".maps");
+
+struct ipvlan_protected_v6_key { __u8 addr[16]; };
+
+struct {
+    __uint(type,        BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 16);
+    __type(key,   struct ipvlan_protected_v6_key);
+    __type(value, __u8);
+    __uint(map_flags, BPF_F_NO_PREALLOC);
+} protected_ipv6 SEC(".maps");
+
 static __always_inline __u64 *tcp_conntrack_lookup(
     bool ipv4, const struct ct_key_v4 *key_v4, const struct ct_key_v6 *key_v6)
 {

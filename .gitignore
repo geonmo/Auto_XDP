@@ -3,3 +3,11 @@ __pycache__/
 *.pyc
 XDP-eBPF-Anti-DDoS-Firewall/
 website/
+
+# Build artifacts
+*.bpf.o
+/ipvlan_loader
+/xdp_detach
+
+# Test run outputs
+tests/ipvlan/test_results_*.json

@@ -40,6 +40,25 @@ static __always_inline int check_tcp_ipv4(
     __u32 dest_port = (__u32)bpf_ntohs(tcp->dest);
     fill_flow_key_v4(&key, ip->saddr, ip->daddr, tcp->source, tcp->dest);
 
+    // Container IPVLAN egress protection: CT-only guard, no port whitelist/rate limit.
+    // Inbound traffic to protected IPs passes only if tc_flow_track recorded an egress entry.
+    {
+        __be32 daddr4 = ip->daddr;
+        if (bpf_map_lookup_elem(&protected_ipv4, &daddr4)) {
+            struct ct_key_v4 ct_key;
+            fill_ct_key_v4_map(&ct_key, &key);
+            __u64 *ts = bpf_map_lookup_elem(&tcp_ct4, &ct_key);
+            if (!ts) return XDP_DROP;
+            struct xdp_runtime_cfg *cfg = runtime_cfg();
+            __u64 age = bpf_ktime_get_ns() - (*ts & ~CT_SYN_PENDING);
+            if (age > cfg_tcp_timeout_ns(cfg)) {
+                bpf_map_delete_elem(&tcp_ct4, &ct_key);
+                return XDP_DROP;
+            }
+            return XDP_PASS;
+        }
+    }
+
     // Malformed-packet check already ran above; fragments dropped before we arrive.
     if ((tcp_flags & TCP_FLAG_SYN) && !(tcp_flags & TCP_FLAG_ACK)) {
         __u64 now = bpf_ktime_get_ns();
@@ -83,6 +102,24 @@ static __always_inline int check_tcp_ipv6(
     __u8 tcp_flags = ((__u8 *)tcp)[13];
     __u32 dest_port = (__u32)bpf_ntohs(tcp->dest);
     fill_flow_key_v6(&key, &ipv6->saddr, &ipv6->daddr, tcp->source, tcp->dest);
+
+    {
+        struct ipvlan_protected_v6_key v6k;
+        __builtin_memcpy(v6k.addr, &ipv6->daddr, 16);
+        if (bpf_map_lookup_elem(&protected_ipv6, &v6k)) {
+            struct ct_key_v6 ct_key;
+            fill_ct_key_v6_map(&ct_key, &key);
+            __u64 *ts = bpf_map_lookup_elem(&tcp_ct6, &ct_key);
+            if (!ts) return XDP_DROP;
+            struct xdp_runtime_cfg *cfg = runtime_cfg();
+            __u64 age = bpf_ktime_get_ns() - (*ts & ~CT_SYN_PENDING);
+            if (age > cfg_tcp_timeout_ns(cfg)) {
+                bpf_map_delete_elem(&tcp_ct6, &ct_key);
+                return XDP_DROP;
+            }
+            return XDP_PASS;
+        }
+    }
 
     // Malformed-packet check already ran above; fragments dropped before we arrive.
     if ((tcp_flags & TCP_FLAG_SYN) && !(tcp_flags & TCP_FLAG_ACK)) {
@@ -137,6 +174,23 @@ static __always_inline int check_udp_ipv4(
     // the inbound tuple here to pass replies without a whitelist check.
     fill_flow_key_v4(&key, ip->saddr, ip->daddr, udp->source, udp->dest);
     fill_ct_key_v4_map(&ct_key, &key);
+
+    // Container IPVLAN egress protection: CT-only, no whitelist fallback on miss
+    {
+        __be32 daddr4 = ip->daddr;
+        if (bpf_map_lookup_elem(&protected_ipv4, &daddr4)) {
+            last_seen = bpf_map_lookup_elem(&udp_ct4, &ct_key);
+            if (!last_seen) return XDP_DROP;
+            __u64 age = now - *last_seen;
+            if (age > cfg_udp_timeout_ns(cfg)) {
+                bpf_map_delete_elem(&udp_ct4, &ct_key);
+                return XDP_DROP;
+            }
+            if (age > cfg_ct_refresh_ns(cfg))
+                bpf_map_update_elem(&udp_ct4, &ct_key, &now, BPF_EXIST);
+            return XDP_PASS;
+        }
+    }
 
     last_seen = bpf_map_lookup_elem(&udp_ct4, &ct_key);
     if (last_seen) {
@@ -285,6 +339,24 @@ static __always_inline int check_udp_ipv6(
 
     fill_flow_key_v6(&key, &ipv6->saddr, &ipv6->daddr, udp->source, udp->dest);
     fill_ct_key_v6_map(&ct_key, &key);
+
+    // Container IPVLAN egress protection: CT-only, no whitelist fallback on miss
+    {
+        struct ipvlan_protected_v6_key v6k;
+        __builtin_memcpy(v6k.addr, &ipv6->daddr, 16);
+        if (bpf_map_lookup_elem(&protected_ipv6, &v6k)) {
+            last_seen = bpf_map_lookup_elem(&udp_ct6, &ct_key);
+            if (!last_seen) return XDP_DROP;
+            __u64 age = now - *last_seen;
+            if (age > cfg_udp_timeout_ns(cfg)) {
+                bpf_map_delete_elem(&udp_ct6, &ct_key);
+                return XDP_DROP;
+            }
+            if (age > cfg_ct_refresh_ns(cfg))
+                bpf_map_update_elem(&udp_ct6, &ct_key, &now, BPF_EXIST);
+            return XDP_PASS;
+        }
+    }
 
     last_seen = bpf_map_lookup_elem(&udp_ct6, &ct_key);
     if (last_seen) {
@@ -489,7 +561,11 @@ static __always_inline int _xdp_fw(struct xdp_md *ctx) {
 
         void *trans_data = (void *)ip + ip_hlen;
 
-        if (bogon_filter_active() && is_bogon_v4(ip->saddr)) {
+        // Local subnet traffic (same subnet as the host NIC) is not bogon-filtered:
+        // reply packets from RFC1918 peers on the same segment must reach both the
+        // host and any protected IPVLAN containers.
+        if (!saddr_in_local_net4(ip->saddr) &&
+            bogon_filter_active() && is_bogon_v4(ip->saddr)) {
             count(CNT_BOGON_DROP);
             { __u32 s[4] = { (__u32)ip->saddr, 0, 0, 0 };
               __u32 d[4] = { (__u32)ip->daddr, 0, 0, 0 };

@@ -69,6 +69,8 @@ struct xdp_runtime_cfg {
     __u64 syn_timeout_ns;   // half-open (SYN-only) TTL; default 30s
     __u32 cfg_flags;        // XDP_CFG_FLAG_* bits; replaces bogon_cfg/abuseipdb_cfg/observability_cfg/slot_def_action
     __u32 _pad;
+    __be32 local_subnet4_addr; // local subnet network address (__be32); 0 = disabled
+    __be32 local_subnet4_mask; // local subnet mask (__be32); 0 = disabled
 };
 
 struct {

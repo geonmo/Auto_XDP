@@ -1,0 +1,75 @@
+---
+# Deploy attacker.py on VM.5 (192.168.100.5)
+# Sends unsolicited TCP connections to the container and reports results.
+
+- name: Install Python 3 and pip
+  dnf:
+    name:
+      - python3
+      - python3-pip
+    state: present
+
+- name: Create deployment directory
+  file:
+    path: /opt/ct-test
+    state: directory
+    mode: '0755'
+
+- name: Copy attacker.py
+  copy:
+    src: "{{ playbook_dir }}/../attacker/src/attacker.py"
+    dest: /opt/ct-test/attacker.py
+    mode: '0644'
+
+- name: Copy requirements.txt
+  copy:
+    src: "{{ playbook_dir }}/../attacker/requirements.txt"
+    dest: /opt/ct-test/attacker_requirements.txt
+    mode: '0644'
+
+- name: Install Python dependencies
+  pip:
+    requirements: /opt/ct-test/attacker_requirements.txt
+    executable: pip3
+    extra_args: --no-cache-dir
+
+- name: Deploy systemd service
+  template:
+    src: ct-attacker.service.j2
+    dest: /etc/systemd/system/ct-attacker.service
+    mode: '0644'
+
+- name: Reload systemd and (re)start service
+  systemd:
+    name: ct-attacker
+    daemon_reload: true
+    state: restarted
+    enabled: true
+
+- name: Open port 8001 in firewalld (if active)
+  firewalld:
+    port: "8001/tcp"
+    permanent: true
+    state: enabled
+    immediate: true
+  ignore_errors: true
+
+- name: Open port 8001 via iptables (nftables compat, policy drop 환경)
+  iptables:
+    chain: INPUT
+    protocol: tcp
+    destination_port: "8001"
+    ctstate: NEW
+    syn: match
+    jump: ACCEPT
+    state: present
+  ignore_errors: true
+
+- name: Wait for attacker health endpoint
+  uri:
+    url: "http://127.0.0.1:8001/api/health"
+    status_code: 200
+  register: health
+  retries: 10
+  delay: 2
+  until: health.status == 200

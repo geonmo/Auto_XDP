@@ -1,0 +1,18 @@
+[Unit]
+Description=CT Test Attacker (auto_xdp_ipvlan)
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /opt/ct-test/attacker.py
+Environment=API_PORT=8001
+Environment=NODE_NAME=attacker-{{ inventory_hostname }}
+Restart=on-failure
+RestartSec=3
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ct-attacker
+
+[Install]
+WantedBy=multi-user.target

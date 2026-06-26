@@ -1,0 +1,72 @@
+---
+# Deploy target_server.py on VM.4 (192.168.100.4)
+# Listens for HTTP requests from the IPVLAN container and reports stats.
+
+- name: Install Python 3 and pip
+  dnf:
+    name:
+      - python3
+      - python3-pip
+    state: present
+
+- name: Create deployment directory
+  file:
+    path: /opt/ct-test
+    state: directory
+    mode: '0755'
+
+- name: Copy target_server.py
+  copy:
+    src: "{{ playbook_dir }}/../target-server/src/target_server.py"
+    dest: /opt/ct-test/target_server.py
+    mode: '0644'
+
+- name: Copy requirements.txt
+  copy:
+    src: "{{ playbook_dir }}/../target-server/requirements.txt"
+    dest: /opt/ct-test/target_server_requirements.txt
+    mode: '0644'
+
+- name: Install Python dependencies
+  pip:
+    requirements: /opt/ct-test/target_server_requirements.txt
+    executable: pip3
+    extra_args: --no-cache-dir
+
+- name: Deploy systemd service
+  template:
+    src: ct-target.service.j2
+    dest: /etc/systemd/system/ct-target.service
+    mode: '0644'
+
+- name: Reload systemd and (re)start service
+  systemd:
+    name: ct-target
+    daemon_reload: true
+    state: restarted
+    enabled: true
+
+- name: Open port 8080 in firewalld (if active)
+  firewalld:
+    port: "8080/tcp"
+    permanent: true
+    state: enabled
+    immediate: true
+  ignore_errors: true
+
+- name: Open port 9090 in firewalld (if active)
+  firewalld:
+    port: "9090/tcp"
+    permanent: true
+    state: enabled
+    immediate: true
+  ignore_errors: true
+
+- name: Wait for target server health endpoint
+  uri:
+    url: "http://127.0.0.1:9090/api/health"
+    status_code: 200
+  register: health
+  retries: 10
+  delay: 2
+  until: health.status == 200
