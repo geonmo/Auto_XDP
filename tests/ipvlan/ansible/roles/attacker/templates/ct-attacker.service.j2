@@ -4,6 +4,7 @@ After=network.target
 
 [Service]
 Type=simple
+User=root
 ExecStart=/usr/bin/python3 /opt/ct-test/attacker.py
 Environment=API_PORT=8001
 Environment=NODE_NAME=attacker-{{ inventory_hostname }}

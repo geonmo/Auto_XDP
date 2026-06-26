@@ -9,11 +9,14 @@ Role B — HTTP client to TARGET_IP:TARGET_PORT:
   Makes periodic outbound requests every CLIENT_INTERVAL seconds.
   TC egress records each request's reverse tuple in conntrack_map.
   XDP then lets VM.4's replies through.
+  Tracks the ephemeral local port used for each connection so scenario 2-b
+  can query them via /api/client-ports.
 
 Role C — REST API on API_PORT (7070):
   Exposes stats for test orchestration from run_tests.sh.
 """
 
+import http.client
 import os
 import threading
 import time
@@ -40,7 +43,31 @@ server_log   = deque(maxlen=500)
 # ── Role B: outbound client stats ──────────────────────────────────────────
 client_stats   = {'total': 0, 'success': 0, 'timeout': 0, 'error': 0}
 client_log     = deque(maxlen=500)
+client_ports   = deque(maxlen=50)   # last N ephemeral local ports used
 _client_active = True
+
+
+# ── Custom HTTP connection that records the local ephemeral port ────────────
+class _PortTrackingHTTPConn(http.client.HTTPConnection):
+    """Records the local ephemeral port after connect() so tests can query it."""
+    def connect(self):
+        super().connect()
+        try:
+            port = self.sock.getsockname()[1]
+            with lock:
+                if port not in client_ports:
+                    client_ports.appendleft(port)
+        except Exception:
+            pass
+
+
+class _PortTrackingHandler(urllib.request.HTTPHandler):
+    def http_open(self, req):
+        return self.do_open(_PortTrackingHTTPConn, req)
+
+
+_port_opener = urllib.request.build_opener(_PortTrackingHandler())
+
 
 # ── Role A: HTTP server ────────────────────────────────────────────────────
 server_app = Flask('server')
@@ -76,7 +103,7 @@ def _client_loop():
         ts  = time.time()
         url = f'http://{TARGET_IP}:{TARGET_PORT}/test'
         try:
-            with urllib.request.urlopen(url, timeout=3.0) as resp:
+            with _port_opener.open(url, timeout=3.0) as resp:
                 _ = resp.read()
                 result = 'success'
         except urllib.error.URLError as exc:
@@ -123,6 +150,17 @@ def get_client_stats():
     with lock:
         return jsonify({**client_stats, 'node': NODE_NAME, 'target': TARGET_IP})
 
+@api_app.route('/api/client-ports')
+def get_client_ports():
+    """Return the last N ephemeral local ports used for connections to TARGET_IP:TARGET_PORT."""
+    with lock:
+        return jsonify({
+            'ports': list(client_ports),
+            'target': TARGET_IP,
+            'target_port': TARGET_PORT,
+            'node': NODE_NAME,
+        })
+
 @api_app.route('/api/server-log')
 def get_server_log():
     limit = int(request.args.get('limit', 50))
@@ -142,6 +180,8 @@ def reset():
         server_log.clear()
         client_stats.update({'total': 0, 'success': 0, 'timeout': 0, 'error': 0})
         client_log.clear()
+        # NOTE: client_ports is NOT cleared on reset so scenario 2-b can query
+        # ports that were used before the stats reset.
     return jsonify({'status': 'reset'})
 
 @api_app.route('/api/start-client', methods=['POST'])
